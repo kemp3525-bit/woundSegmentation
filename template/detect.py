@@ -38,7 +38,7 @@ def save_side_by_side(original_path, gt_overlay_path , pred_overlay_path , outpu
     combined = np.hstack((original, gt_overlay, pred_overlay))
     cv2.imwrite(output_path, combined)
 
-def save_overlay(img, mask, output_path, alpha=0.5):
+def save_overlay(img, mask, output_path, alpha=0.7):
     color_mask = cv2.applyColorMap(mask, cv2.COLORMAP_JET)
     blended = cv2.addWeighted(img, 1.0, color_mask, alpha, 0)
     cv2.imwrite(output_path, blended)
@@ -48,37 +48,49 @@ def save_prediction_with_score_above_mask(img_path, output_path):
     img = cv2.imread(img_path)
 
     for r in results:
-        masks = r.masks.data.cpu().numpy()
-        final_mask = (masks.max(axis=0) * 255).astype(np.uint8)
+    # Check if masks exist
+        if r.masks is not None:
+            masks = r.masks.data.cpu().numpy()
+            # Continue saving mask...
+            final_mask = (masks.max(axis=0) * 255).astype(np.uint8)
+            # Convert to color mask
+            color_mask = cv2.applyColorMap(final_mask, cv2.COLORMAP_JET)
+            color_mask = cv2.resize(color_mask, (img.shape[1], img.shape[0]))
 
-        # Convert to color mask
-        color_mask = cv2.applyColorMap(final_mask, cv2.COLORMAP_JET)
-        color_mask = cv2.resize(color_mask, (img.shape[1], img.shape[0]))
+            # Blend mask onto image
+            blended = cv2.addWeighted(img, 1.0, color_mask, 0.7, 0)
 
-        # Blend mask onto image
-        blended = cv2.addWeighted(img, 1.0, color_mask, 0.5, 0)
+            # Compute mean confidence (precision proxy)
+            confs = r.boxes.conf.cpu().numpy() if r.boxes.conf is not None else [0]
+            mean_conf = float(np.mean(confs))
 
-        # Compute mean confidence (precision proxy)
-        confs = r.boxes.conf.cpu().numpy() if r.boxes.conf is not None else [0]
-        mean_conf = float(np.mean(confs))
+            # Find bounding box of mask
+            coords = cv2.findNonZero(final_mask)
+            if coords is not None:
+                x, y, w, h = cv2.boundingRect(coords)
+                text_x = x
+                text_y = max(y - 10, 0)  # 10 pixels above the top
+            else:
+                # If mask is empty, put text top-left
+                text_x, text_y = 10, 30
 
-        # Find bounding box of mask
-        coords = cv2.findNonZero(final_mask)
-        if coords is not None:
-            x, y, w, h = cv2.boundingRect(coords)
-            text_x = x
-            text_y = max(y - 10, 0)  # 10 pixels above the top
+            # Put text above the segmented area
+            cv2.putText(blended, f"wound: {mean_conf:.2f}",
+                        (text_x, text_y),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0), 2)
+
+            # Save final image
+            cv2.imwrite(output_path, blended)
         else:
-            # If mask is empty, put text top-left
-            text_x, text_y = 10, 30
+            print(f"No masks detected for {image_path}")
+            # Optionally, save an empty mask
+            from PIL import Image
+            img = Image.open(image_path)
+            empty_mask = np.zeros((img.height, img.width), dtype=np.uint8)
+            empty_mask = Image.fromarray(empty_mask)
+            empty_mask.save(output_path)
+        
 
-        # Put text above the segmented area
-        cv2.putText(blended, f"wound: {mean_conf:.2f}",
-                    (text_x, text_y),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0), 2)
-
-        # Save final image
-        cv2.imwrite(output_path, blended)
 
 # ----- PROCESS ALL IMAGES -----
 for file_name in os.listdir(images_dir):
